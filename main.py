@@ -1,8 +1,26 @@
+import os
 import cv2
 from geometry.board import distance_from_center
 
-# Load dartboard image
-image = cv2.imread("assets/test_images/board.jpg")
+# Get absolute path to this file
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Build image path safely
+IMAGE_PATH = os.path.join(
+    BASE_DIR, "assets", "test_images", "board.jpeg"
+)
+
+print("Looking for image at:")
+print(IMAGE_PATH)
+
+print("Exists:", os.path.exists(IMAGE_PATH))
+print("File size:", os.path.getsize(IMAGE_PATH), "bytes")
+
+image = cv2.imread(IMAGE_PATH)
+if image is None:
+    raise FileNotFoundError(f"Could not load image at {IMAGE_PATH}")
+
+
 if image is None:
     raise FileNotFoundError("Could not load assets/test_images/board.jpg")
 
