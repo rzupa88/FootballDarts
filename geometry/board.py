@@ -48,6 +48,7 @@ class Dartboard:
         self.double_inner = (cfg["double_inner_pct"] / 100.0) * R
         self.double_outer = (cfg["double_outer_pct"] / 100.0) * R
 
+
     # -------------------------
     # Geometry helpers
     # -------------------------
@@ -59,18 +60,35 @@ class Dartboard:
     def ring_for_point(self, x, y):
         d = self.distance_from_center(x, y)
 
+        # Bulls
         if d <= self.inner_bull:
             return "INNER BULL"
         elif d <= self.outer_bull:
             return "OUTER BULL"
-        elif self.triple_inner <= d <= self.triple_outer:
-            return "TRIPLE"
-        elif self.double_inner <= d <= self.double_outer:
-            return "DOUBLE"
-        elif d <= self.radius:
-            return "SINGLE"
-        else:
+
+        # Miss
+        if d > self.radius:
             return "MISS"
+
+        # Triple / Double rings
+        if self.triple_inner <= d <= self.triple_outer:
+            return "TRIPLE"
+        if self.double_inner <= d <= self.double_outer:
+            return "DOUBLE"
+
+        # Singles (everything else inside board)
+        # Inner single: outside outer bull but inside triple ring
+        if d < self.triple_inner:
+            return "SINGLE_INNER"
+
+        # Outer single: outside triple ring but inside double ring
+        # (d > triple_outer is guaranteed here because triple handled above)
+        if d < self.double_inner:
+            return "SINGLE_OUTER"
+
+        # Safety fallback (shouldn’t hit because double handled above)
+        return "MISS"
+
 
     # -------------------------
     # Angle → sector mapping

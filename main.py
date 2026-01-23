@@ -1,7 +1,11 @@
 import os
 import cv2
 import numpy as np
+import time
+import json
+import argparse
 from geometry.board import Dartboard
+
 
 # =========================
 # Paths
@@ -11,6 +15,18 @@ IMAGE_PATH = os.path.join(BASE_DIR, "assets", "test_images", "board.jpeg")
 
 OUT_DIR = os.path.join(BASE_DIR, "assets", "test_images", "out")
 os.makedirs(OUT_DIR, exist_ok=True)
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--image", default=IMAGE_PATH)
+parser.add_argument("--x", type=int, default=None)
+parser.add_argument("--y", type=int, default=None)
+parser.add_argument("--post-url", default=None)
+parser.add_argument("--print-tests", action="store_true", help="Run the inner/outer single sanity test suite")
+parser.add_argument("--no-save", action="store_true", help="Skip writing warped/overlay PNG files")
+args = parser.parse_args()
+
+# Allow overriding image path from CLI
+IMAGE_PATH = args.image
 
 # =========================
 # Load image
@@ -69,8 +85,10 @@ warped = cv2.warpPerspective(image, H, (OUTPUT_SIZE, OUTPUT_SIZE))
 
 # Save warped image (so you can preview it in VS Code)
 warped_path = os.path.join(OUT_DIR, f"warped_{OUTPUT_SIZE}.png")
-cv2.imwrite(warped_path, warped)
-print("✅ Saved:", warped_path)
+if args.print_tests and (not args.no_save):
+    cv2.imwrite(warped_path, warped)
+    print("✅ Saved:", warped_path)
+
 
 # =========================
 # Board model (warped space)
@@ -80,6 +98,59 @@ center_x, center_y = w // 2, h // 2
 radius = min(center_x, center_y)
 
 board = Dartboard(center_x, center_y, radius)
+
+def dart_result_to_darthit(res: dict, *, source: str = "camera", confidence: float | None = None, meta: dict | None = None) -> dict:
+    """
+    Convert Dartboard.dart_result_for_point() output into the TS-friendly DartHit shape:
+      { segment, multiplier, source, timestamp, confidence?, meta? }
+    """
+    ring = res.get("ring")
+    number = res.get("number")
+
+    # Default
+    segment = 0
+    multiplier = "single_outer"
+
+    if ring == "INNER BULL":
+        segment = 25
+        multiplier = "inner_bull"
+    elif ring == "OUTER BULL":
+        segment = 25
+        multiplier = "outer_bull"
+    elif ring == "MISS":
+        segment = 0
+        multiplier = "single_outer"
+    elif ring == "TRIPLE":
+        segment = int(number)
+        multiplier = "triple"
+    elif ring == "DOUBLE":
+        segment = int(number)
+        multiplier = "double"
+    elif ring == "SINGLE_INNER":
+        segment = int(number)
+        multiplier = "single_inner"
+    elif ring == "SINGLE_OUTER":
+        segment = int(number)
+        multiplier = "single_outer"
+    else:
+        # Fallback: treat unknown as miss
+        segment = 0
+        multiplier = "single_outer"
+
+    hit = {
+        "segment": segment,
+        "multiplier": multiplier,
+        "source": source,
+        "timestamp": int(time.time() * 1000),
+    }
+
+    if confidence is not None:
+        hit["confidence"] = float(confidence)
+    if meta is not None:
+        hit["meta"] = meta
+
+    return hit
+
 
 # =========================
 # Draw overlays (rings + wedge lines)
@@ -108,37 +179,108 @@ for i in range(20):
     cv2.line(overlay, (center_x, center_y), (x2, y2), (255, 255, 255), 1)
 
 overlay_path = os.path.join(OUT_DIR, f"overlay_{OUTPUT_SIZE}.png")
-cv2.imwrite(overlay_path, overlay)
-print("✅ Saved:", overlay_path)
+if args.print_tests and (not args.no_save):
+    cv2.imwrite(overlay_path, overlay)
+    print("✅ Saved:", overlay_path)
+
 
 # =========================
 # Quick non-GUI test points (prints expected codes)
 # =========================
 tests = [
+    # -------- Inner single (between outer bull and triple ring) --------
     (
-        "TOP wedge, single",
+        "TOP wedge, INNER single",
         (center_x, int(center_y - (board.triple_inner - 5))),
     ),
     (
-        "RIGHT wedge, single",
+        "RIGHT wedge, INNER single",
         (int(center_x + (board.triple_inner - 5)), center_y),
     ),
     (
-        "BOTTOM wedge, single",
+        "BOTTOM wedge, INNER single",
         (center_x, int(center_y + (board.triple_inner - 5))),
     ),
     (
-        "LEFT wedge, single",
+        "LEFT wedge, INNER single",
         (int(center_x - (board.triple_inner - 5)), center_y),
+    ),
+
+    # -------- Outer single (between triple ring and double ring) --------
+    (
+        "TOP wedge, OUTER single",
+        (center_x, int(center_y - (board.triple_outer + 5))),
+    ),
+    (
+        "RIGHT wedge, OUTER single",
+        (int(center_x + (board.triple_outer + 5)), center_y),
+    ),
+    (
+        "BOTTOM wedge, OUTER single",
+        (center_x, int(center_y + (board.triple_outer + 5))),
+    ),
+    (
+        "LEFT wedge, OUTER single",
+        (int(center_x - (board.triple_outer + 5)), center_y),
     ),
 ]
 
+
 print("\n=== Angle→Number sanity checks ===")
-for name, (x, y) in tests:
+
+if args.print_tests:
+    for name, (x, y) in tests:
+        res = board.dart_result_for_point(x, y)
+
+        hit = dart_result_to_darthit(
+            res,
+            source="camera",
+            confidence=1.0,
+            meta={
+                "image": os.path.basename(IMAGE_PATH),
+                "warped_size": OUTPUT_SIZE,
+                "point": {"x": x, "y": y},
+                "ring": res["ring"],
+                "code": res["code"],
+            },
+        )
+
+        print(f"{name:24s} at ({x},{y}) -> {res['code']} [{res['ring']}] ({res['points']} pts)")
+        print("DartHit:", json.dumps(hit, indent=2))
+
+else:
+    if args.x is None or args.y is None:
+        raise SystemExit("Provide --x and --y, or run with --print-tests")
+
+    x, y = args.x, args.y
     res = board.dart_result_for_point(x, y)
-    print(f"{name:22s} at ({x},{y}) -> {res['code']} ({res['points']} pts)")
+
+    hit = dart_result_to_darthit(
+        res,
+        source="camera",
+        confidence=1.0,
+        meta={
+            "image": os.path.basename(IMAGE_PATH),
+            "warped_size": OUTPUT_SIZE,
+            "point": {"x": x, "y": y},
+            "ring": res["ring"],
+            "code": res["code"],
+        },
+    )
+
+    # In single-hit mode, print ONLY the JSON (easy to pipe to curl later)
+    print(json.dumps(hit, indent=2))
+
+    if args.post_url:
+        import requests
+        resp = requests.post(args.post_url, json=hit, timeout=10)
+        print(f"POST -> {resp.status_code}")
+        if resp.text:
+            print(resp.text[:500])
 print("==================================\n")
 
-print("Open the saved PNGs in VS Code:")
-print(" -", warped_path)
-print(" -", overlay_path)
+
+if args.print_tests and (not args.no_save):
+    print("Open the saved PNGs in VS Code:")
+    print(" -", warped_path)
+    print(" -", overlay_path)
